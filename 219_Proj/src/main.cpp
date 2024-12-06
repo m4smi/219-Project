@@ -37,8 +37,8 @@ int sensorPosPin = A2; // input pin for MR sensor
 int fsrPin = A3; // input pin for FSR sensor
 
 //----Variables for motors
-double angular_xuser = 0;
-double linear_xuser = 0;
+double xuser_ang = 0;
+double xuser_lin = 0;
 double m1Vel = 0;
 double m2Pos = 0;
 double m2Pos_prev = 0;
@@ -47,6 +47,10 @@ float m2Vel = 0;
 float m2Vel_filt = 0;
 float filtvel_lin = 0;
 float theta = 0;
+float currtime = 0;
+float prevtime = 0;
+float delta = 0;
+float delta_sec = 0;
 
 //----Dimensions
 double rsect = 0.073152;
@@ -60,11 +64,11 @@ double rp = 0.004191;
 volatile long encoderct = 0;
 unsigned long lastct = 0;
 unsigned long lasttime = 0;
-static unsigned long lastprinttime = 0;
+//static unsigned long lastprinttime = 0;
 float rpm = 0;
 
 //----States
-bool guidance = false;
+bool guidance = true;
 bool hindrance = false;
 bool doorknob = true;
 bool reverse = false;
@@ -83,12 +87,59 @@ bool slipped = false; // Bool to see if jar has slipped yet
 float xslip = 0; //Position where we want jar to "slip" at
 
 //----------------------------Functions
+//Outputs torque to the motor
+void applym1_rot_torque(double force)
+{
+  torque = (force * rplly * rdkob)/rsect;
+  bool direction = (force > 0);
+
+  //If force > 0 --> spins clockwise otherwise counter-clockwise
+  digitalWrite(dirPin_1, direction ? LOW : HIGH);
+
+  duty = sqrt(abs(torque) / 0.03);
+
+  // Make sure the duty cycle is between 0 and 100%
+  if (duty > 1) {
+    duty = 1;
+  } else if (duty < 0) {
+    duty = 0;
+  }
+  output = (int)(duty * 255);  // convert duty cycle to output signal
+
+  analogWrite(pwmPin_1, output);
+}
+
+void applym2_lin_torque(double force)
+{
+  Tp = (rp / rs) * rh * force;  // Compute the require motor pulley torque (Tp) to generate that force
+  bool direction = (force > 0);
+
+  digitalWrite(dirPin_2, direction ? LOW : HIGH);
+
+  // Compute the duty cycle required to generate Tp (torque at the motor pulley)
+  duty = sqrt(abs(Tp) / 0.03);
+
+  // Make sure the duty cycle is between 0 and 100%
+  if (duty > 1) {
+    duty = 1;
+  } else if (duty < 0) {
+    duty = 0;
+  }
+  output = (int)(duty * 255);  // convert duty cycle to output signal
+  analogWrite(pwmPin_2, output); // output the signal
+}
+
 void hap_guidance()
 {
   float k = 5;
   float b = 5;
   float xend = 3; //final position of door rotation
-  float xequi = 0;
+  float xequi_ang = 0.000;
+  float xmin_ang = 0;
+  float xmax_ang = 0;
+  float xequi_lin = 0.000;
+  float xmin_lin = -0.002;
+  float xmax_lin = 0.008;
   float xuser = 0;
   //assuming user start out at xuser = 0 and xend > 0
 
@@ -98,14 +149,14 @@ void hap_guidance()
   if (doorknob) 
   {
     
-    if(angular_xuser != 0) //if user is using doorknob
+    if(xuser_ang != 0) //if user is using doorknob
     {
       //move with the user (positive force)
       //assumming xuser = xini = 0 and xend > 0
       //large assitive force at the beginning and decay as user approach xend
-      if(angular_xuser < xend)
+      if(xuser_ang < xmax_ang)
       {
-        force_rot = k * (xend - angular_xuser) + b * m1Vel;
+        force_rot = k * (xmax_ang - xuser_ang) + b * m1Vel;
         //pushing in the doorknob
         force_lin = 0; //door is not yet opened
       }
@@ -116,13 +167,7 @@ void hap_guidance()
         //open (push in) the door
         force_lin = - b * (m1Vel); //CCW , scale with user's velocity
         //applym2_torque(force_lin);
-        delay(2500);
-        //------incoporate LED here
-        //re-calibrate
-        force_lin = k * (xuser - xequi);// "springs back" to the original position (closed door)
-        force_rot = -k * (xuser - xequi); //rotate backward to the original position
-        
-        delay(2000);
+        delay(2500); //might get rid of
       }
     }
     else //receiving no input i.e. doorknob not moving
@@ -136,7 +181,7 @@ void hap_guidance()
   else if (lid) //need to find xslip ([])
   {
     //if user is using the lid
-    if(angular_xuser != 0)
+    if(xuser_ang != 0)
     {
       //At beginning oppose a very minimum force against the user until they reach the slip position (xslip)
       if(xuser <= xslip)
@@ -156,12 +201,34 @@ void hap_guidance()
         //----incoporate LED HERE
         delay(2500);
         //linear force push CW --> opening the lid
-        force_lin = k * (xend - linear_xuser);
+        force_lin = k * (xend - xuser_lin);
         //force_lin = b * (m1Vel)
         //----turn off LED
       } 
     } 
-  }  
+  }
+  applym1_rot_torque(force_rot);
+  applym2_lin_torque(force_lin);
+  //----Recalibrate the system
+  if (doorknob)
+  {
+    Serial.println("Recalibrating...");
+    //force_lin = k * (m2Pos - xlin_equi);
+    //"springs back" to the original position (closed door)
+    force_lin = k * (abs(m2Pos - xequi_lin));// m2Pos is now pushed in (negative), abs() --> distance is positive
+    //rotate backward to the original position
+    force_rot = -k * (xuser_ang - xequi_ang); //check the sign
+    applym1_rot_torque(force_rot);
+    delay(2000);
+    applym2_lin_torque(force_lin);
+    delay(2000);
+    Serial.println("System ready!");
+  }
+  else if (lid)
+  {
+    ;
+  }
+
 }
 
 void hap_hindrance()
@@ -178,9 +245,9 @@ void hap_hindrance()
   //Assume that distance between 2 points is positive
   if (doorknob) 
   {
-    if(angular_xuser != 0) //if user is using doorknob
+    if(xuser_ang != 0) //if user is using doorknob
     {
-      if(angular_xuser < xend)
+      if(xuser_ang < xend)
       //opppose the user's force (negative force)
       //assuming xuser = xini = 0 and xend > 0
       {
@@ -188,7 +255,7 @@ void hap_hindrance()
         /*"+ b * filtvel" --> make resistive force smaller if user puts 
         in more effort (bigger) (might not be true)*/
 
-        force_rot = - k * (xend - angular_xuser) + b * m1Vel;
+        force_rot = - k * (xend - xuser_ang) + b * m1Vel;
         //force_rot = - k * (xend - angular_xuser) - b * m1Vel; //most resistive
 
         //linear force
@@ -222,7 +289,7 @@ void hap_hindrance()
     //Not yet reached slip point
     if(xuser <= xslip && xuser != 0)
     {
-      force_rot = -k * (xslip - angular_xuser) - b * m1Vel; //CW, resistive force based on distace and user's velocity
+      force_rot = -k * (xslip - xuser_ang) - b * m1Vel; //CW, resistive force based on distace and user's velocity
       force_lin = 0; //lid is not yet opened
     }
     //User reached slip point
@@ -231,7 +298,7 @@ void hap_hindrance()
       //force rotates with the user (CCW)
       force_rot = - b * m1Vel; // CCW, scale with user's velocity
       delay(2500); //for smooth transition (hopefully)
-      force_lin = k * (xend - linear_xuser); //CW, push open the lid (spring might be too strong?)
+      force_lin = k * (xend - xuser_lin); //CW, push open the lid (spring might be too strong?)
     }
   } 
 }
@@ -261,11 +328,12 @@ void m1_speedcal()
 
   //compute rpm
   rpm = (changect/cpr_out) * (60.0/delta);
-  //converting to ft/s
+  //converting to m/s
   cirsect = 2 * PI * rsect;
-  m1Vel = (rpm * cirsect) * (1/60) * (1/12);
 
   lastct = encoderct;
+
+  m1Vel = (rpm * cirsect) * (1/60);
 }
 
 //Filters the velocity
@@ -281,49 +349,32 @@ float filtered_vel(float vel)
   return vel_filtered;
 }
 
-//Outputs torque to the motor
-void applym1_torque(double force)
+void m2cali()
 {
-  torque = (force * rplly * rdkob)/rsect;
-  bool direction = (force > 0);
+  rawPos = analogRead(sensorPosPin);  //current raw position from MR sensor
 
-  //If force > 0 --> spins clockwise otherwise counter-clockwise
-  digitalWrite(dirPin_1, direction ? LOW : HIGH);
+  // Calculate differences between subsequent MR sensor readings
+  rawDiff = rawPos - lastRawPos;          //difference btwn current raw position and last raw position
+  lastRawDiff = rawPos - lastLastRawPos;  //difference btwn current raw position and last last raw position
+  rawOffset = abs(rawDiff);
+  lastRawOffset = abs(lastRawDiff);
 
-  duty = sqrt(abs(torque) / 0.03);
+  // Update position record-keeping vairables
+  lastLastRawPos = lastRawPos;
+  lastRawPos = rawPos;
 
-  // Make sure the duty cycle is between 0 and 100%
-  if (duty > 1) {
-    duty = 1;
-  } else if (duty < 0) {
-    duty = 0;
+  // Keep track of flips over 180 degrees
+  if ((lastRawOffset > flipThresh) && (!flipped)) { // enter this anytime the last offset is greater than the flip threshold AND it has not just flipped
+    if (lastRawDiff > 0) {       // check to see which direction the drive wheel was turning
+      flipNumber--;              // cw rotation
+    } else {                     // if(rawDiff < 0)
+      flipNumber++;              // ccw rotation
+    }
+    flipped = true;            // set boolean so that the next time through the loop won't trigger a flip
+  } else {                        // anytime no flip has occurred
+    flipped = false;
   }
-  output = (int)(duty * 255);  // convert duty cycle to output signal
-
-  analogWrite(pwmPin_1, output);
-}
-
-void applym2_torque(double force)
-{
-  Tp = (rp / rs) * rh * force;  // Compute the require motor pulley torque (Tp) to generate that force
-
-  if (force > 0) {
-    digitalWrite(dirPin_2, HIGH);
-  } else {
-    digitalWrite(dirPin_2, LOW);
-  }
-
-  // Compute the duty cycle required to generate Tp (torque at the motor pulley)
-  duty = sqrt(abs(Tp) / 0.03);
-
-  // Make sure the duty cycle is between 0 and 100%
-  if (duty > 1) {
-    duty = 1;
-  } else if (duty < 0) {
-    duty = 0;
-  }
-  output = (int)(duty * 255);  // convert duty cycle to output signal
-  analogWrite(pwmPin_2, output); // output the signal
+  updatedPos = rawPos + flipNumber * OFFSET; // need to update pos based on what most recent offset is
 }
 
 void setPwmFrequency(int pin, int divisor) 
@@ -355,6 +406,30 @@ void setPwmFrequency(int pin, int divisor)
       default: return;
     }
     TCCR2B = TCCR2B & 0b11111000 | mode;
+  }
+}
+
+void modeswitch()
+{
+  if (Serial.available())
+  {
+    char user_input = Serial.read();
+    
+    if (user_input == 's' || user_input == 'S')
+    {
+      if(guidance)
+      {
+        guidance = false;
+        hindrance = true;
+        Serial.println("Switched to Hindrance mode");
+      }
+      else
+      {
+        guidance = true;
+        hindrance = false;
+        Serial.println("Switched to Guidance mode");
+      }
+    }
   }
 }
 ////----------------------------Main
@@ -398,32 +473,8 @@ void setup()
 void loop() 
 {
   /* Positions countring for motor 02 */
-  float begin = millis();
   // Get voltage output by MR sensor
-  rawPos = analogRead(sensorPosPin);  //current raw position from MR sensor
-
-  // Calculate differences between subsequent MR sensor readings
-  rawDiff = rawPos - lastRawPos;          //difference btwn current raw position and last raw position
-  lastRawDiff = rawPos - lastLastRawPos;  //difference btwn current raw position and last last raw position
-  rawOffset = abs(rawDiff);
-  lastRawOffset = abs(lastRawDiff);
-
-  // Update position record-keeping vairables
-  lastLastRawPos = lastRawPos;
-  lastRawPos = rawPos;
-
-  // Keep track of flips over 180 degrees
-  if ((lastRawOffset > flipThresh) && (!flipped)) { // enter this anytime the last offset is greater than the flip threshold AND it has not just flipped
-    if (lastRawDiff > 0) {       // check to see which direction the drive wheel was turning
-      flipNumber--;              // cw rotation
-    } else {                     // if(rawDiff < 0)
-      flipNumber++;              // ccw rotation
-    }
-    flipped = true;            // set boolean so that the next time through the loop won't trigger a flip
-  } else {                        // anytime no flip has occurred
-    flipped = false;
-  }
-  updatedPos = rawPos + flipNumber * OFFSET; // need to update pos based on what most recent offset is
+  m2cali();
 
   //----------------------------Motor 01
   force_lin = 0;
@@ -432,32 +483,31 @@ void loop()
   m1_speedcal();
 
   //----get pos in degrees
-  angular_xuser = (encoderct * 360)/cpr_out;
-  linear_xuser = angular_xuser * (180/PI) * rsect;
+  xuser_ang = (encoderct * 360)/cpr_out;
+  xuser_lin = xuser_ang * (180/PI) * rsect;
 
-  applym1_torque(force_lin);
+  applym1_rot_torque(force_lin);
 
   //----------------------------Motor 02
   double theta_s = .0106 * updatedPos - 9.0251;
 
   //---motor 2 position
-  m2Pos = rh * (theta_s * 3.14159 / 180);
+  m2Pos = rh * (theta_s * PI / 180);
   //---motor 2 velocity
-  float end = millis();
-  float delta = 0;
-  float delta_sec = 0;
-  if (end > begin)
+  currtime = millis();
+  if (currtime > prevtime)
   {
-    delta = end - begin;
-    begin = end; 
+    delta = currtime - prevtime;
+    prevtime = currtime; 
   }
-  delta_sec = delta/64000;
+  delta_sec = delta/64000.0;
+  
   m2Vel = double(m2Pos - m2Pos_prev) / delta_sec;
   //---filter motor 2 velocity
   m2Vel_filt = filtered_vel(m2Vel);
 
   m2Pos_prev = m2Pos;
-  applym2_torque(forcem2);
+  applym2_lin_torque(forcem2);
   //----Choose a mode
   /*if (guidance)
   {
@@ -470,21 +520,23 @@ void loop()
   
   //if (millis() - lastprinttime > 1000)
   //{
-  /*
+  
     Serial.print("vel is: ");
     Serial.println(m1Vel, 3);
     Serial.print("angular pos is: ");
-    Serial.println(angular_xuser, 3);
+    Serial.println(xuser_ang, 3);
     Serial.print("linear pos is: ");
-    Serial.println(linear_xuser, 3);
-  */
+    Serial.println(xuser_lin, 3);
+  
   //}
+  /*
   Serial.print("vel is: ");
   Serial.println(m2Vel_filt, 3);
   Serial.print("linear pos is: ");
   Serial.println(m2Pos, 3);
   //Serial.print("encoderct is: ");
   //Serial.println(encoderct, 3);
+  */
   Serial.println("---------------End of iteration---------------");
   delay(2500);
   lasttime = millis();
