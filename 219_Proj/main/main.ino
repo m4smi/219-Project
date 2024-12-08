@@ -162,11 +162,11 @@ void loop()
   {
     int virtualEnvChoice = Serial.parseInt();
 
-    if (Serial.available() != 0)
-    {
-      Serial.print("Env Choice: ");
-      Serial.println(virtualEnvChoice);
-    }
+    // if (Serial.available() != 0)
+    // {
+    //   Serial.print("Env Choice: ");
+    //   Serial.println(virtualEnvChoice);
+    // }
 
     switch (virtualEnvChoice)
     {
@@ -174,9 +174,11 @@ void loop()
         break;
       case 1:
         userSettings |= HAPTIC_HANDLE_SETTINGS::DOOR;
+        Serial.println("Selected: DOOR");
         break;
       case 2:
         userSettings |= HAPTIC_HANDLE_SETTINGS::JAR;
+        Serial.println("Selected: JAR");
         break;
       default:
         Serial.println("Unknown setting");
@@ -195,12 +197,11 @@ void loop()
   {
     int modeChoice = Serial.parseInt();
 
-    if(Serial.available() != 0)
-    {
-    Serial.print("Mode Choice: ");
-    Serial.println(modeChoice);
-
-    }
+    // if(Serial.available() != 0)
+    // {
+    //   Serial.print("Mode Choice: ");
+    //   Serial.println(modeChoice);
+    // }
 
     switch(modeChoice)
     {
@@ -208,9 +209,11 @@ void loop()
         break;
       case 1:
         userSettings |= HAPTIC_HANDLE_SETTINGS::ASSISTIVE;
+        Serial.println("Selected: ASSISTIVE");
         break;
       case 2:
         userSettings |= HAPTIC_HANDLE_SETTINGS::RESISTIVE;
+        Serial.println("Selected: RESISTIVIE");
         break;
       default:
         Serial.println("Unknown mode");
@@ -246,14 +249,14 @@ void loop()
     */
     if(userSettings & HAPTIC_HANDLE_SETTINGS::ASSISTIVE)
     {
-      Serial.println("Assistive");
+      // Serial.println("Assistive");
       k_handle = -0.003;
       door_factor = -0.5;
     }
 
     else if(userSettings & HAPTIC_HANDLE_SETTINGS::RESISTIVE)
     {
-      Serial.println("Resistive");
+      // Serial.println("Resistive");
       k_handle = 0.005;
       door_factor = 1;
     }
