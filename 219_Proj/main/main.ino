@@ -162,6 +162,12 @@ void loop()
   {
     int virtualEnvChoice = Serial.parseInt();
 
+    if (Serial.available() != 0)
+    {
+      Serial.print("Env Choice: ");
+      Serial.println(virtualEnvChoice);
+    }
+
     switch (virtualEnvChoice)
     {
       case 0:
@@ -171,6 +177,7 @@ void loop()
         break;
       case 2:
         userSettings |= HAPTIC_HANDLE_SETTINGS::JAR;
+        break;
       default:
         Serial.println("Unknown setting");
         return;
@@ -187,6 +194,13 @@ void loop()
   while(Serial.available() == 0)
   {
     int modeChoice = Serial.parseInt();
+
+    if(Serial.available() != 0)
+    {
+    Serial.print("Mode Choice: ");
+    Serial.println(modeChoice);
+
+    }
 
     switch(modeChoice)
     {
@@ -212,7 +226,7 @@ void loop()
   /*
     Case 1: Door
   */
-  if(userSettings | HAPTIC_HANDLE_SETTINGS::DOOR)
+  if(userSettings & HAPTIC_HANDLE_SETTINGS::DOOR)
   {
     apply_rot_torque(0.01);
     apply_trans_torque(5);
@@ -230,16 +244,18 @@ void loop()
     /*
       Establish system parameters
     */
-    if(userSettings | HAPTIC_HANDLE_SETTINGS::ASSISTIVE)
+    if(userSettings & HAPTIC_HANDLE_SETTINGS::ASSISTIVE)
     {
-      k_handle = 0.0075;
-      door_factor = 1;
-    }
-
-    else if(userSettings | HAPTIC_HANDLE_SETTINGS::RESISTIVE)
-    {
+      Serial.println("Assistive");
       k_handle = -0.003;
       door_factor = -0.5;
+    }
+
+    else if(userSettings & HAPTIC_HANDLE_SETTINGS::RESISTIVE)
+    {
+      Serial.println("Resistive");
+      k_handle = 0.005;
+      door_factor = 1;
     }
 
     else
@@ -296,7 +312,7 @@ void loop()
   /*
     Case 2: Jar
   */
-  else if(userSettings | HAPTIC_HANDLE_SETTINGS::JAR)
+  else if(userSettings & HAPTIC_HANDLE_SETTINGS::JAR)
   {
     double xslip = 0.1;
 
@@ -313,14 +329,14 @@ void loop()
     /*
       Establish system parameters
     */
-    if(userSettings | HAPTIC_HANDLE_SETTINGS::ASSISTIVE)
+    if(userSettings & HAPTIC_HANDLE_SETTINGS::ASSISTIVE)
     {
-
+      Serial.println("Assistive");
     }
 
-    else if(userSettings | HAPTIC_HANDLE_SETTINGS::RESISTIVE)
+    else if(userSettings & HAPTIC_HANDLE_SETTINGS::RESISTIVE)
     {
-
+      Serial.println("Resistive");
     }
 
     else
@@ -334,6 +350,7 @@ void loop()
     bool isOpen = false;
     while(!isComplete)
     {
+      isComplete = true;
       // get the translational position
       transMotorPosCount();
       
@@ -349,7 +366,7 @@ void loop()
         isOpen = true;
       }
 
-      if (isOpen && xuser_lin - initTranPos < 0.1)
+      if (isOpen && xuser_lin - initTransPos < 0.1)
       {
         // opening force
       }
