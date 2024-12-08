@@ -53,14 +53,16 @@ float delta = 0;
 float delta_sec = 0;
 
 //----Dimensions
-double rsect = 0.073152;
-double rplly = 0.004191;
+double rsect = 0.0635;
+double rplly = 0.015875;
 double rdkob = 0.075;
 double rh = 0.0508; //[m]
 double rs = 0.0762;   //[m]
 double rp = 0.004191;
 
 //----Variables for speed and position cals
+int previousEncoderState;
+int currentEncoderState;
 volatile long encoderct = 0;
 unsigned long lastct = 0;
 unsigned long lasttime = 0;
@@ -84,7 +86,7 @@ unsigned int output = 0;
 
 //---- Variables for jar VE
 bool slipped = false; // Bool to see if jar has slipped yet
-float xslip = 0; //Position where we want jar to "slip" at
+float xslip = 0.1; //Position where we want jar to "slip" at
 
 enum HAPTIC_HANDLE_SETTINGS {
   DOOR = 0x1,
@@ -107,11 +109,11 @@ void setup()
   setPwmFrequency(pwmPinRot, 1);
   setPwmFrequency(pwmPinTrans, 1);
 
-  pinMode(encoderA, INPUT_PULLUP);
-  pinMode(encoderB, INPUT_PULLUP);
+  pinMode(encoderA, INPUT);
+  pinMode(encoderB, INPUT);
   
-  attachInterrupt(digitalPinToInterrupt(encoderA), encoderhandler, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(encoderB), encoderhandler, CHANGE);
+  // attachInterrupt(digitalPinToInterrupt(encoderA), encoderhandler, CHANGE);
+  // attachInterrupt(digitalPinToInterrupt(encoderB), encoderhandler, CHANGE);
 
   pinMode(sensorPosPin, INPUT); // set MR sensor pin to be an input
   pinMode(fsrPin, INPUT);
@@ -132,6 +134,8 @@ void setup()
   lastLastRawPos = analogRead(sensorPosPin);
   lastRawPos = analogRead(sensorPosPin);
   flipNumber = 0;
+
+  previousEncoderState = digitalRead(encoderB);
 
   Serial.println("***********************");
   pad(5);
@@ -203,19 +207,107 @@ void loop()
 
   Serial.println("Setting Up System");
   Serial.println("Please Do Not Touch System Until Done");
+  delay(100000);
 
   /*
     Case 1: Door
   */
   if(userSettings | HAPTIC_HANDLE_SETTINGS::DOOR)
   {
-    apply_rot_torque(1);
-    apply_trans_torque(1);
-    delay(1);
+    apply_rot_torque(0.01);
+    apply_trans_torque(5);
+    delay(100000);
+    apply_trans_torque(200);
 
     transMotorPosCount();
 
-    double initRotPos = 0;
+    double initRotPos = getRotMotorPos();
+    double initTransPos = getTransMotorPos();
+
+    double k_handle;
+    double door_factor;
+
+    /*
+      Establish system parameters
+    */
+    if(userSettings | HAPTIC_HANDLE_SETTINGS::ASSISTIVE)
+    {
+      k_handle = 0.0075;
+      door_factor = 1;
+    }
+
+    else if(userSettings | HAPTIC_HANDLE_SETTINGS::RESISTIVE)
+    {
+      k_handle = -0.003;
+      door_factor = -0.5;
+    }
+
+    else
+    {
+      Serial.println("ERROR: Unknown Mode");
+    }
+
+    Serial.println("Ready");
+
+    bool isComplete = false;
+    bool isRotated = false;
+    while(!isComplete)
+    {
+      // get the translational position
+      transMotorPosCount();
+      
+      // get the rotational position
+      getRotMotorPos();
+
+      // Serial.print("User Rotational Displacement: ");
+      // Serial.println(encoderct);
+
+      double f_doorhandle = k_handle * (initRotPos - xuser_ang) + 0.01;
+      double f_door = 200;
+
+      Serial.print("User Displacement: ");
+      Serial.println(xuser_ang - initRotPos);
+
+      /*
+        Check if the door handle is rotated by x
+        if so then set isRotated to true
+      */
+      if (!isRotated && initRotPos - xuser_ang > 0.1)
+        isRotated = true;
+
+      /*
+        Check if the handle is rotated but door is not open
+        if so then render opening force
+        else simulation is complete
+      */
+      if(isRotated && xuser_lin - initTransPos > 0.5)
+        isComplete = true;
+      else
+        f_door = door_factor * 10;
+
+      Serial.print("Output force: ");
+      Serial.println(f_doorhandle, 4);
+      
+      apply_rot_torque(f_doorhandle);
+      apply_trans_torque(f_door);
+    }
+  }
+
+  /*
+    Case 2: Jar
+  */
+  else if(userSettings | HAPTIC_HANDLE_SETTINGS::JAR)
+  {
+    double xslip = 0.1;
+
+    apply_rot_torque(-0.01);
+    apply_trans_torque(-5);
+    delay(100000);
+    apply_trans_torque(-200);
+
+    transMotorPosCount();
+
+    double initRotPos = getRotMotorPos();
     double initTransPos = getTransMotorPos();
 
     /*
@@ -223,7 +315,7 @@ void loop()
     */
     if(userSettings | HAPTIC_HANDLE_SETTINGS::ASSISTIVE)
     {
-      
+
     }
 
     else if(userSettings | HAPTIC_HANDLE_SETTINGS::RESISTIVE)
@@ -238,58 +330,34 @@ void loop()
 
     Serial.println("Ready");
 
-    bool isComplete = true;
-
-    bool isRotated = false;
+    bool isComplete = false;
+    bool isOpen = false;
     while(!isComplete)
     {
-      // get the handle position
+      // get the translational position
       transMotorPosCount();
       
       // get the rotational position
+      getRotMotorPos();
 
-      /*
-        Check if the door handle is rotated by x
-        if so then set isRotated to true
-      */
-      if (!isRotated && rotPos - initRotPos > 0.1)
-        isRotated = true;
+      double f_jar_lid = -1;
+      double f_jar = -200;
 
-      /*
-        Check if the handle is rotated but door is not open
-        if so then render opening force
-        else simulation is complete
-      */
-      if(isRotated && transPos - initTransPos < 0.1) {}
+      if (!isOpen && xuser_ang - initRotPos > xslip)
+      {
+        f_jar_lid = 0;
+        isOpen = true;
+      }
+
+      if (isOpen && xuser_lin - initTranPos < 0.1)
+      {
+        // opening force
+      }
       else
         isComplete = true;
-      
-      apply_rot_torque();
-      apply_trans_torque();
-    }
-  }
 
-  /*
-    Case 2: Jar
-  */
-  else if(userSettings | HAPTIC_HANDLE_SETTINGS::JAR)
-  {
-    /*
-      Establish system parameters
-    */
-    if(userSettings | HAPTIC_HANDLE_SETTINGS::ASSISTIVE){}
-
-    else if(userSettings | HAPTIC_HANDLE_SETTINGS::RESISTIVE){}
-
-    else
-    {
-      Serial.println("ERROR: Unknown Mode");
-    }
-
-    bool isComplete = true;
-    while(!isComplete)
-    {
-
+      apply_rot_torque(f_jar_lid);
+      apply_trans_torque(f_jar);
     }
   }
 
@@ -299,76 +367,10 @@ void loop()
     return;
   }
 
+  apply_rot_torque(0);
+  apply_trans_torque(0);
+
   Serial.println("Completed");
-  /* Positions countring for motor 02 */
-  // Get voltage output by MR sensor
-  // m2Poscount();
-
-  // //----------------------------Motor 01
-  // force_lin = 0;
-  // double forcem2 = 0;
-  // //----get velocity in ft/s
-  // m1_speedcal();
-
-  // //----get pos in degrees
-  // xuser_ang = (encoderct * 360)/cpr_out;
-  // xuser_lin = xuser_ang * (180/PI) * rsect;
-
-  // applym1_rot_torque(force_lin);
-
-  // //----------------------------Motor 02
-  // double theta_s = .0106 * updatedPos - 9.0251;
-
-  // //---motor 2 position
-  // m2Pos = rh * (theta_s * PI / 180);
-  // //---motor 2 velocity
-  // currtime = millis();
-  // if (currtime > prevtime)
-  // {
-  //   delta = currtime - prevtime;
-  //   prevtime = currtime; 
-  // }
-  // delta_sec = delta/64000.0;
-  
-  // m2Vel = double(m2Pos - m2Pos_prev) / delta_sec;
-  // //---filter motor 2 velocity
-  // m2Vel_filt = filtered_vel(m2Vel);
-
-  // m2Pos_prev = m2Pos;
-  // applym2_lin_torque(forcem2);
-  // //----Choose a mode
-  // /*if (guidance)
-  // {
-  //   hap_guidance();
-  // }
-  // else
-  // {
-  //   hap_hindrance();
-  // }*/
-  
-  // //if (millis() - lastprinttime > 1000)
-  // //{
-  //   Serial.println("-------Motor 01");
-  //   Serial.print("vel is: ");
-  //   Serial.println(m1Vel, 3);
-  //   Serial.print("angular pos is: ");
-  //   Serial.println(xuser_ang, 3);
-  //   Serial.print("linear pos is: ");
-  //   Serial.println(xuser_lin, 3);
-  
-  // //}
-  // /*
-  // Serial.println("-------Motor 02");
-  // Serial.print("vel is: ");
-  // Serial.println(m2Vel_filt, 3);
-  // Serial.print("linear pos is: ");
-  // Serial.println(m2Pos, 3);
-  // //Serial.print("encoderct is: ");
-  // //Serial.println(encoderct, 3);
-  // */
-  // Serial.println("---------------End of iteration---------------");
-  // delay(2500);
-  // lasttime = millis();
 }
 
 /*******************
@@ -623,6 +625,21 @@ void encoderhandler()
   }
 }
 
+void encoderPos()
+{
+  currentEncoderState = digitalRead(encoderB);
+
+  if(currentEncoderState != previousEncoderState)
+  {
+    if(digitalRead(encoderA) == currentEncoderState)
+      encoderct++;
+    else
+      encoderct--;
+  }
+
+  previousEncoderState = currentEncoderState;
+}
+
 //Calculates velocity
 void m1_speedcal()
 {
@@ -686,10 +703,16 @@ double getTransMotorPos()
   transMotorPosCount();
 
   double ts = -0.0186 * updatedPos - 0.0475;
-  xh = ts * (PI / 180) * rh;
-  return xh;
+  xuser_lin = ts * (PI / 180) * rh;
+  return xuser_lin;
 }
 
+double getRotMotorPos()
+{
+  encoderPos();
+  xuser_ang = (encoderct * 360)/cpr_out;
+  return xuser_ang;
+}
 
 void setPwmFrequency(int pin, int divisor) 
 {
