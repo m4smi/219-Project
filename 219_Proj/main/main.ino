@@ -366,7 +366,7 @@ void loop()
     */
     if(userSettings & HAPTIC_HANDLE_SETTINGS::ASSISTIVE)
     {
-      xslip = 1.4;
+      xslip = 0.2;
       jar_res_force = -0.075;
       jar_lift_force = 1;
       k_jar_lid = 0.000095;
