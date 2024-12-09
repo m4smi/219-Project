@@ -345,35 +345,41 @@ void loop()
   {
 
     apply_rot_torque(-0.01);
-    apply_trans_torque(-5);
+    apply_trans_torque(5);
     delay(100000);
-    apply_trans_torque(-200);
+    apply_trans_torque(200);
 
     getTransMotorPos();
 
     double initRotPos = getRotMotorPos();
     double initTransPos = getTransMotorPos();
+    double targetLinPos = 0.04;
 
     double k_jar_lid; // spring value for jar lid for assistive opening
     double jar_res_force; // resistance of jar before slip
     double xslip; // distance to rotate the lid before it releases (rotational)
     double linOvercomeDist; // distance to overcome before removing the lid is easy (linear)
+    double jar_lift_force;
+
     /*
       Establish system parameters
     */
     if(userSettings & HAPTIC_HANDLE_SETTINGS::ASSISTIVE)
     {
-      xslip = 0.1;
+      xslip = 1.4;
       jar_res_force = -0.075;
+      jar_lift_force = 1;
       k_jar_lid = 0.000095;
-      linOvercomeDist;
+      linOvercomeDist = 0.005;
     }
 
     else if(userSettings & HAPTIC_HANDLE_SETTINGS::RESISTIVE)
     {
       xslip = 0.4;
       jar_res_force = -0.25;
+      jar_lift_force = 5;
       k_jar_lid = 0;
+      linOvercomeDist = 0.01;
     }
 
     else
@@ -394,15 +400,22 @@ void loop()
       getRotMotorPos();
 
       double f_jar_lid = jar_res_force;
-      double f_jar = -200;
+      double f_jar = 200;
 
-      if (!isOpen && xuser_ang - initRotPos > xslip)
+      // Serial.print("Angular Displacement: ");
+      // Serial.println(xuser_ang - initRotPos);
+
+      if (!isOpen && abs(xuser_ang - initRotPos) > xslip)
         isOpen = true;
 
-      if (isOpen && xuser_lin - initTransPos < 0.1)
+      if (isOpen && xuser_lin - initTransPos < targetLinPos - 0.005)
       {
         // opening rotational force
         f_jar_lid = k_jar_lid * abs(initRotPos - xuser_ang - xslip);
+
+        f_jar = jar_lift_force;
+        if(abs(xuser_lin - initTransPos) > linOvercomeDist)
+          f_jar = 0;
 
         // opening linear force
       }
