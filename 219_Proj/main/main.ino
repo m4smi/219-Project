@@ -213,7 +213,7 @@ void loop()
         break;
       case 2:
         userSettings |= HAPTIC_HANDLE_SETTINGS::RESISTIVE;
-        Serial.println("Selected: RESISTIVIE");
+        Serial.println("Selected: RESISTIVE");
         break;
       default:
         Serial.println("Unknown mode");
@@ -222,15 +222,53 @@ void loop()
   }
   clear();
 
+  /*
+  Check if user selected door and resistive
+  if so prompt them with the option to select various values
+  */
+
+  int resistiveHandleScalar = 1;
+  if(userSettings & HAPTIC_HANDLE_SETTINGS::DOOR && userSettings & HAPTIC_HANDLE_SETTINGS::RESISTIVE)
+  {
+    Serial.print("Select Handle Resistance Level (1-10): ");
+
+    while(Serial.available() == 0)
+    {
+      int input = Serial.parseInt();
+
+      if(input == 0)
+        continue;
+
+      if(input < 1 || input > 10)
+      {
+        Serial.println(input);
+        Serial.println("Invalid Resistance Level");
+        return;
+      }
+
+      resistiveHandleScalar = input;
+      Serial.println(input);
+    }
+  }
+  clear();
+  Serial.println("------------");
+
   Serial.println("Setting Up System");
   Serial.println("DO NOT TOUCH THE SYSTEM UNTIL READY");
   delay(100000);
+
+  /********************
+
+  Force Rendering Section
+
+  ********************/
 
   /*
     Case 1: Door
   */
   if(userSettings & HAPTIC_HANDLE_SETTINGS::DOOR)
   {
+    // move system to position
     apply_rot_torque(0.1);
     apply_trans_torque(-5);
     delay(100000);
@@ -244,6 +282,9 @@ void loop()
 
     double k_handle;
     double k_door;
+    long doorOpenDelay;
+    double initHandleForce;
+    double openedAngle;
 
     /*
       Establish system parameters
@@ -251,15 +292,21 @@ void loop()
     if(userSettings & HAPTIC_HANDLE_SETTINGS::ASSISTIVE)
     {
       // Serial.println("Assistive");
-      k_handle = -0.00005;
+      openedAngle = 8;
+      k_handle = -0.0000125;
       k_door = 250;
+      doorOpenDelay = 50000;
+      initHandleForce = 0.0005;
     }
 
     else if(userSettings & HAPTIC_HANDLE_SETTINGS::RESISTIVE)
     {
       // Serial.println("Resistive");
-      k_handle = 0.00095;
-      k_door = -150;
+      openedAngle = 60;
+      k_handle = 0.000001 * resistiveHandleScalar * resistiveHandleScalar;
+      k_door = -15 * resistiveHandleScalar * resistiveHandleScalar;
+      doorOpenDelay = 0;
+      initHandleForce = 0.0005 * resistiveHandleScalar * resistiveHandleScalar;
     }
 
     else
@@ -282,9 +329,9 @@ void loop()
       // Serial.print("User Rotational Displacement: ");
       // Serial.println(encoderct);
 
-      double f_doorhandle = k_handle * abs(initRotPos - xuser_ang) + 0.05;
-      if(userSettings & HAPTIC_HANDLE_SETTINGS::ASSISTIVE && abs(initRotPos - xuser_ang) > 0.01)
-        f_doorhandle = k_handle * abs(initRotPos - xuser_ang - 0.01);
+      double f_doorhandle = k_handle * abs(initRotPos - xuser_ang) + initHandleForce;
+      if(userSettings & HAPTIC_HANDLE_SETTINGS::ASSISTIVE && abs(initRotPos - xuser_ang) > 0.0005)
+        f_doorhandle = k_handle * abs(initRotPos - xuser_ang - 0.0005);
 
       double f_door = -200;
 
@@ -295,44 +342,27 @@ void loop()
         Check if the door handle is rotated by x
         if so then set isRotated to true
       */
-      if (!isRotated && abs(initRotPos - xuser_ang) > 2.5)
+      if (!isRotated && abs(initRotPos - xuser_ang) > openedAngle)
       {
         isRotated = true;
-        delay(50000);
+        delay(doorOpenDelay);
       }
 
+      // Hard Stop when user reaches open position
+      if(userSettings & HAPTIC_HANDLE_SETTINGS::RESISTIVE && abs(initRotPos - xuser_ang) > openedAngle)
+        f_doorhandle = 1;
 
       /*
         Check if the handle is rotated but door is not open
         if so then render opening force
         else simulation is complete
       */
-      if(isRotated && abs(xuser_lin - initTransPos) > (targetLinPos - 0.005))
-        isComplete = true;
-      else if(isRotated)
-      {
-        //f_door = door_factor * 10;
+      if(isRotated && abs(xuser_lin - initTransPos) < (targetLinPos - 0.005))
         f_door = k_door * abs((targetLinPos - 0.005) - (xuser_lin - initTransPos));
+      else if(isRotated)
+        isComplete = true;
 
-      }
-
-      // Serial.print("Output force: ");
-      // Serial.println(f_doorhandle, 4);
-
-      // Serial.print("isRotated: ");
-      // Serial.println(isRotated);
-
-      // Serial.print("Encoder Value: ");
-      // Serial.println(encoderct);
-
-      // Serial.print("Linear Displacement: ");
-      // Serial.println(xuser_lin - initTransPos, 5);
-
-      // Serial.print("User Linear Position: ");
-      // Serial.println(xuser_lin);
-
-      // Serial.println("----");
-      
+      // Output determined force to user
       apply_rot_torque(f_doorhandle);
       apply_trans_torque(f_door);
     }
@@ -343,17 +373,13 @@ void loop()
   */
   else if(userSettings & HAPTIC_HANDLE_SETTINGS::JAR)
   {
-
-    apply_rot_torque(-0.01);
+    // move system to position
+    apply_rot_torque(0.01);
     apply_trans_torque(5);
     delay(100000);
     apply_trans_torque(200);
 
     getTransMotorPos();
-
-    double initRotPos = getRotMotorPos();
-    double initTransPos = getTransMotorPos();
-    double targetLinPos = 0.04;
 
     double k_jar_lid; // spring value for jar lid for assistive opening
     double jar_res_force; // resistance of jar before slip
@@ -367,16 +393,16 @@ void loop()
     if(userSettings & HAPTIC_HANDLE_SETTINGS::ASSISTIVE)
     {
       xslip = 0.2;
-      jar_res_force = -0.075;
+      jar_res_force = 0.075;
       jar_lift_force = 1;
-      k_jar_lid = 0.000095;
+      k_jar_lid = -0.000095;
       linOvercomeDist = 0.005;
     }
 
     else if(userSettings & HAPTIC_HANDLE_SETTINGS::RESISTIVE)
     {
-      xslip = 0.4;
-      jar_res_force = -0.25;
+      xslip = 5;
+      jar_res_force = 0.65;
       jar_lift_force = 5;
       k_jar_lid = 0;
       linOvercomeDist = 0.01;
@@ -386,8 +412,16 @@ void loop()
     {
       Serial.println("ERROR: Unknown Mode");
     }
+    
+    apply_rot_torque(jar_res_force);
+    delay(10000);
 
     Serial.println("Ready");
+
+
+    double initRotPos = getRotMotorPos();
+    double initTransPos = getTransMotorPos();
+    double targetLinPos = 0.04;
 
     bool isComplete = false;
     bool isOpen = false;
@@ -399,30 +433,27 @@ void loop()
       // get the rotational position
       getRotMotorPos();
 
-      double f_jar_lid = jar_res_force;
-      double f_jar = 200;
-
-      // Serial.print("Angular Displacement: ");
-      // Serial.println(xuser_ang - initRotPos);
+      double f_jar_lid = jar_res_force; // rotational force
+      double f_jar = 200; // linear force
 
       if (!isOpen && abs(xuser_ang - initRotPos) > xslip)
         isOpen = true;
 
-      if (isOpen && xuser_lin - initTransPos < targetLinPos - 0.005)
+      if (isOpen && abs(xuser_lin - initTransPos) < targetLinPos - 0.005)
       {
         // opening rotational force
         f_jar_lid = k_jar_lid * abs(initRotPos - xuser_ang - xslip);
 
+        // lifting lid force becomes 0 after some distance is traveled
         f_jar = jar_lift_force;
         if(abs(xuser_lin - initTransPos) > linOvercomeDist)
           f_jar = 0;
-
-        // opening linear force
       }
       else if (isOpen)
-      {
         isComplete = true;
-      }
+
+      // Serial.print("Rotational Displacement: ");
+      // Serial.println(abs(xuser_ang - initRotPos));
 
       apply_rot_torque(f_jar_lid);
       apply_trans_torque(f_jar);
@@ -436,6 +467,9 @@ void loop()
   }
 
   Serial.println("Completed");
+
+  apply_rot_torque(0);
+  apply_trans_torque(0);
 }
 
 /*******************
